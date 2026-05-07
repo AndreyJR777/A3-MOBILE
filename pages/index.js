@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Head from 'next/head'
+import { supabase } from '../lib/supabase'
 
 const CHAPTERS = [
   { id: 1, title: 'Despertar', threshold: 0, text: 'Seus olhos se abrem lentamente. Luzes vermelhas piscam no painel de controle. O alarme ecoa pelos corredores vazios da nave. Você é o único sobrevivente.\n\nOs sistemas estão falhando. O casco está danificado, os motores quase desligados. O suporte de vida opera no mínimo. Você precisa agir — seu corpo é a nave.\n\nCada gole de água restaura o núcleo de refrigeração. Cada alongamento reativa o suporte de vida. Cada pausa recarrega os motores.\n\nSua sobrevivência depende de você.' },
@@ -103,9 +104,13 @@ export default function Home() {
 
   async function loadPlayer(id) {
     try {
-      const res = await fetch(`/api/player?id=${id}`)
-      if (res.ok) {
-        const p = await res.json()
+      const { data: p, error } = await supabase
+        .from('players')
+        .select('*')
+        .eq('id', id)
+        .single()
+        
+      if (p && !error) {
         setSystems({ hull: p.hull_hp, engine: p.engine_hp, lifeSupport: p.life_support_hp, cooling: p.cooling_hp })
         setMissions({ water: p.total_water || 0, stretch: p.total_stretches || 0, break: p.total_breaks || 0 })
         setTotalMissions(p.missions_completed || 0)
@@ -115,18 +120,15 @@ export default function Home() {
   }
 
   async function savePlayer() {
-    if (!playerId) return
+    if (!playerId || playerId.startsWith('local-')) return
     try {
-      await fetch('/api/player', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'save', id: playerId,
-          hull_hp: Math.round(systems.hull), engine_hp: Math.round(systems.engine),
-          life_support_hp: Math.round(systems.lifeSupport), cooling_hp: Math.round(systems.cooling),
-          missions_completed: totalMissions, current_chapter: currentChapter,
-          total_water: missions.water, total_stretches: missions.stretch, total_breaks: missions.break
-        })
+      await supabase.from('players').upsert({
+        id: playerId,
+        hull_hp: Math.round(systems.hull), engine_hp: Math.round(systems.engine),
+        life_support_hp: Math.round(systems.lifeSupport), cooling_hp: Math.round(systems.cooling),
+        missions_completed: totalMissions, current_chapter: currentChapter,
+        total_water: missions.water, total_stretches: missions.stretch, total_breaks: missions.break,
+        last_activity: new Date().toISOString()
       })
     } catch (e) { console.error(e) }
   }
@@ -178,13 +180,24 @@ export default function Home() {
     return () => clearInterval(saveRef.current)
   }, [playerId, showWelcome, systems, missions, totalMissions])
 
-  // Fetch weather
+  // Fetch weather directly from Open-Meteo
   const fetchWeather = useCallback(async (lat, lon) => {
     setWeatherLoading(true)
     try {
-      const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`)
+      const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code`)
       const data = await res.json()
-      setWeather(data)
+      if (data.current) {
+        const temp = data.current.temperature_2m
+        const isHot = temp > 28
+        setWeather({
+          temperature: temp,
+          humidity: data.current.relative_humidity_2m,
+          weatherName: isHot ? 'Onda de Calor Solar' : 'Clima Estável',
+          severity: isHot ? 'danger' : 'normal',
+          message: isHot ? 'ALERTA: Alta radiação solar. Sistemas de refrigeração sob estresse extremo.' : 'Sistemas operando em temperatura nominal.',
+          coolingDamageMultiplier: isHot ? 2.5 : 1.0
+        })
+      }
     } catch (e) { console.error(e) }
     setWeatherLoading(false)
   }, [])
@@ -193,12 +206,20 @@ export default function Home() {
     if (!city) return
     setWeatherLoading(true)
     try {
-      const res = await fetch(`/api/weather?city=${encodeURIComponent(city)}`)
-      const data = await res.json()
-      if (!data.error) setWeather(data)
-    } catch (e) { console.error(e) }
-    setWeatherLoading(false)
-  }, [])
+      const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=pt`)
+      const geoData = await geoRes.json()
+      if (geoData.results && geoData.results.length > 0) {
+        const { latitude, longitude } = geoData.results[0]
+        await fetchWeather(latitude, longitude)
+      } else {
+        setWeather({ error: true, message: 'Localização não encontrada pelo radar.' })
+        setWeatherLoading(false)
+      }
+    } catch (e) { 
+      console.error(e)
+      setWeatherLoading(false) 
+    }
+  }, [fetchWeather])
 
   useEffect(() => {
     if (showWelcome) return
@@ -224,18 +245,20 @@ export default function Home() {
     await requestNotificationPermission();
 
     try {
-      const res = await fetch('/api/player', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'create', name: playerName.trim() })
-      })
-      const data = await res.json()
-      if (data.id) {
+      const { data, error } = await supabase
+        .from('players')
+        .insert([{ name: playerName.trim() }])
+        .select()
+        .single()
+        
+      if (data && data.id) {
         setPlayerId(data.id)
         localStorage.setItem('naufrago_player_id', data.id)
         localStorage.setItem('naufrago_player_name', playerName.trim())
         setShowWelcome(false)
         showToast('Sistemas online. Boa sorte, tripulante.')
+      } else {
+        throw new Error(error?.message || 'Failed to create')
       }
     } catch (e) {
       // Fallback to local-only mode
@@ -244,6 +267,7 @@ export default function Home() {
       localStorage.setItem('naufrago_player_id', fakeId)
       localStorage.setItem('naufrago_player_name', playerName.trim())
       setShowWelcome(false)
+      showToast('Sistemas offline. Iniciando no modo local.', 'warning')
     }
   }
 

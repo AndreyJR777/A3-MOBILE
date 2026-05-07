@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Naufrago Espacial</string>
+    <string name="title_activity_main">Naufrago Espacial</string>
+    <string name="package_name">com.andrey.naufrago</string>
+    <string name="custom_url_scheme">com.andrey.naufrago</string>
+</resources>
