@@ -50,6 +50,44 @@ export default function Home() {
   const decayRef = useRef(null)
   const cooldownRef = useRef(null)
   const saveRef = useRef(null)
+  const swPortRef = useRef(null)
+
+  // Channel Messaging API Setup
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(registration => {
+        if (registration.active) {
+          const channel = new MessageChannel();
+          swPortRef.current = channel.port1;
+          
+          channel.port1.onmessage = (event) => {
+            if (event.data.type === 'COOLDOWN_FINISHED') {
+              const missionType = event.data.payload;
+              // Reset local cooldown if it was somehow out of sync
+              setCooldowns(prev => ({ ...prev, [missionType]: 0 }));
+              showToast(`Comandante, sua missão de ${missionType} está disponível novamente!`, 'warning');
+            }
+          };
+
+          registration.active.postMessage({ type: 'INIT_PORT' }, [channel.port2]);
+        }
+      });
+    }
+  }, []);
+
+  // Request Notifications Permission
+  async function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          showToast('Notificações ativadas! Você será alertado sobre missões.', 'success');
+        }
+      } catch (e) {
+        console.error('Error requesting notification permission:', e);
+      }
+    }
+  }
 
   // Load saved game
   useEffect(() => {
@@ -105,6 +143,13 @@ export default function Home() {
           lifeSupport: Math.max(0, prev.lifeSupport - 0.5),
           cooling: Math.max(0, prev.cooling - 0.5 * mult)
         }
+        
+        // Push notification if critical
+        if (Object.values(next).some(v => v > 0 && v < 20) && 'Notification' in window && Notification.permission === 'granted') {
+           // We could trigger a local notification here but we'll stick to toasts to avoid spam, 
+           // background notifications are handled by SW cooldowns.
+        }
+
         if (next.hull <= 0 && next.engine <= 0 && next.lifeSupport <= 0 && next.cooling <= 0) {
           setGameOver(true)
         }
@@ -174,6 +219,10 @@ export default function Home() {
 
   async function startGame() {
     if (!playerName.trim()) return
+    
+    // Request notification permission when user interacts
+    await requestNotificationPermission();
+
     try {
       const res = await fetch('/api/player', {
         method: 'POST',
@@ -215,10 +264,20 @@ export default function Home() {
       }
     })
 
+    const durationSeconds = type === 'water' ? 90 : type === 'stretch' ? 120 : 180;
+    
     setCooldowns(prev => ({
       ...prev,
-      [type]: type === 'water' ? 90 : type === 'stretch' ? 120 : 180
+      [type]: durationSeconds
     }))
+
+    // Notify Service Worker via Channel Messaging API to track cooldown in background
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'START_COOLDOWN',
+        payload: { missionType: type, durationSeconds }
+      });
+    }
 
     const unlocked = CHAPTERS.filter(c => newTotal >= c.threshold)
     if (unlocked.length > 0) {

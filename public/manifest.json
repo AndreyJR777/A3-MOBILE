@@ -1,0 +1,22 @@
+{
+  "name": "O Náufrago Espacial",
+  "short_name": "Náufrago",
+  "description": "Jogo de sobrevivência espacial gamificado focado em saúde",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#1a0a2e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://www.google.com/s2/favicons?domain=nasa.gov&sz=192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://www.google.com/s2/favicons?domain=nasa.gov&sz=512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
